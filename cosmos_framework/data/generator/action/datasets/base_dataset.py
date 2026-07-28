@@ -45,8 +45,10 @@ class ActionBaseDataset(ABC, Dataset):
         sample_stride: int = 1,
     ) -> None:
         super().__init__()
-        if pose_convention != "backward_framewise":
-            raise NotImplementedError(f"{type(self).__name__} only supports backward_framewise pose deltas.")
+        if pose_convention not in ("backward_framewise", "world_framewise"):
+            raise NotImplementedError(
+                f"{type(self).__name__} only supports backward_framewise/world_framewise pose deltas."
+            )
 
         self._fps = float(fps)
         self._dt = 1.0 / self._fps

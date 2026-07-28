@@ -25,6 +25,7 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "abc_yam": 16,  # ABC uses the same YAM 20D FK action contract
     "fractal": 20,
     "drawanything": 21,
+    "stretch_lerobot": 22,
 }
 
 
@@ -47,6 +48,7 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "abc_yam": 20,
     "fractal": 10,
     "drawanything": 3,
+    "stretch_lerobot": 10,
     # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``) and ``hand_pose``
     # (variable with ``keypoint_option`` and ``rotation_format``) are absent
     # because their raw width is set per-dataset at construction time. Inference
