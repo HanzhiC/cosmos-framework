@@ -57,6 +57,7 @@ import numpy as np
 import tyro
 from PIL import Image
 from scipy.spatial.transform import Rotation
+from tqdm import tqdm
 
 from cosmos_framework.utils import log
 
@@ -237,7 +238,8 @@ def main(
 
         episode_names = sorted(p.name for p in task_dir.iterdir() if p.is_dir() and not p.name.startswith("_"))
         n_converted = 0
-        for name in episode_names:
+        pbar = tqdm(episode_names, desc=task, unit="ep", dynamic_ncols=True)
+        for name in pbar:
             if max_episodes_per_task >= 0 and n_converted >= max_episodes_per_task:
                 break
 
@@ -260,6 +262,8 @@ def main(
             stats[f"converted_via_{meta.source}"] += 1
             stats["converted_frames"] += n_frames
             n_converted += 1
+            pbar.set_postfix(converted=n_converted)
+        pbar.close()
 
         log.info(f"{task}: converted {n_converted}/{len(episode_names)} episodes")
 
