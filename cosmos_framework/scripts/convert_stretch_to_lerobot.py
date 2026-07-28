@@ -57,6 +57,7 @@ import numpy as np
 import tyro
 from PIL import Image
 from scipy.spatial.transform import Rotation
+from tqdm import tqdm
 
 from cosmos_framework.utils import log
 
@@ -237,14 +238,15 @@ def main(
 
         episode_names = sorted(p.name for p in task_dir.iterdir() if p.is_dir() and not p.name.startswith("_"))
         n_converted = 0
-        for name in episode_names:
+        pbar = tqdm(episode_names, desc=task, unit="ep")
+        for name in pbar:
             if max_episodes_per_task >= 0 and n_converted >= max_episodes_per_task:
                 break
 
             meta = _resolve_episode(task_dir, name, csv_meta)
             if meta is None:
                 stats["unresolved"] += 1
-                log.warning(f"{task}/{name}: no success/teleop signal found; skipping")
+                pbar.write(f"  SKIP {task}/{name}: no success/teleop signal found")
                 continue
             if not (meta.success and meta.is_teleop):
                 stats["filtered_success_or_teleop"] += 1
@@ -253,13 +255,15 @@ def main(
             ep_dir = task_dir / name
             if not _episode_files_present(ep_dir, meta.start, meta.end):
                 stats["missing_files"] += 1
-                log.warning(f"{task}/{name}: missing frame file(s) in range [{meta.start}, {meta.end}]; skipping")
+                pbar.write(f"  SKIP {task}/{name}: missing frame file(s) in range [{meta.start}, {meta.end}]")
                 continue
 
             n_frames = _convert_episode(dataset, ep_dir, meta, _TASK_INSTRUCTIONS[task])
             stats[f"converted_via_{meta.source}"] += 1
             stats["converted_frames"] += n_frames
             n_converted += 1
+            pbar.set_postfix(converted=n_converted, frames=stats["converted_frames"])
+        pbar.close()
 
         log.info(f"{task}: converted {n_converted}/{len(episode_names)} episodes")
 
