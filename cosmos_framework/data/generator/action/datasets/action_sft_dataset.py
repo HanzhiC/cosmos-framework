@@ -22,6 +22,7 @@ from torch.utils.data import Dataset, IterableDataset, get_worker_info
 from cosmos_framework.data.generator.action.datasets.droid_merged_lerobot_dataset import DROIDMergedLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
+from cosmos_framework.data.generator.action.datasets.stretch_lerobot_dataset import StretchLeRobotDataset
 from cosmos_framework.data.generator.action.transforms import ActionTransformPipeline
 
 
@@ -193,6 +194,68 @@ def get_action_droid_merged_lerobot_sft_dataset(
         filter_dict_path=filter_dict_path,
         split=split,
         use_success_only=use_success_only,
+    )
+    transform = ActionTransformPipeline(
+        tokenizer_config=tokenizer_config,
+        cfg_dropout_rate=cfg_dropout_rate,
+        max_action_dim=max_action_dim,
+        append_viewpoint_info=append_viewpoint_info,
+        append_duration_fps_timestamps=append_duration_fps_timestamps,
+        append_resolution_info=append_resolution_info,
+        append_idle_frames=append_idle_frames,
+        idle_frames_dropout=idle_frames_dropout,
+        format_prompt_as_json=format_prompt_as_json,
+    )
+    sft = ActionSFTDataset(dataset, transform, resolution)
+    if iterable_shuffle:
+        return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed)
+    return sft
+
+
+def get_action_stretch_fd_sft_dataset(
+    *,
+    root: str,
+    fps: float = 15.0,
+    chunk_length: int = 16,
+    image_size: int = 256,
+    mode: str = "forward_dynamics",
+    camera_mode: str = "concat_view",
+    action_normalization: str | None = None,
+    split: str = "train",
+    val_ratio: float = 0.02,
+    seed: int = 0,
+    resolution: str | int = "480",
+    max_action_dim: int = 64,
+    tokenizer_config: dict | None = None,
+    cfg_dropout_rate: float = 0.1,
+    append_viewpoint_info: bool = True,
+    append_duration_fps_timestamps: bool = True,
+    append_resolution_info: bool = True,
+    append_idle_frames: bool = True,
+    idle_frames_dropout: float = 0.05,
+    format_prompt_as_json: bool = True,
+    iterable_shuffle: bool = False,
+    episode_shuffle_seed: int = 42,
+) -> Dataset:
+    """Build the Stretch action forward-dynamics SFT dataset.
+
+    Feeds ``StretchLeRobotDataset`` (10D ``ee_pose`` action derived from absolute
+    ``observation.state.cartesian_position``, concat_view head+gripper camera)
+    through ``ActionTransformPipeline``. ``root`` is a LOCAL LeRobot dir produced by
+    ``cosmos_framework.scripts.convert_stretch_to_lerobot`` (there is no upstream
+    pre-converted Stretch dataset, unlike DROID/LIBERO).
+    """
+    dataset = StretchLeRobotDataset(
+        root=root,
+        fps=fps,
+        chunk_length=chunk_length,
+        image_size=image_size,
+        mode=mode,
+        camera_mode=camera_mode,
+        action_normalization=action_normalization,
+        split=split,
+        val_ratio=val_ratio,
+        seed=seed,
     )
     transform = ActionTransformPipeline(
         tokenizer_config=tokenizer_config,
