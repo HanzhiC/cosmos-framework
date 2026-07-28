@@ -26,7 +26,7 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation as R
 
-PoseConvention = Literal["absolute", "backward_anchored", "backward_framewise"]
+PoseConvention = Literal["absolute", "backward_anchored", "backward_framewise", "world_framewise"]
 RotationConvention = Literal["matrix", "euler_xyz", "quat_xyzw", "quat_wxyz", "rot6d", "axisangle", "rot9d"]
 
 
@@ -394,8 +394,14 @@ def _get_relative_delta_transform(
         return inv_poses_abs[frame_idx] @ poses_abs[frame_idx + 1]
     if pose_convention == "backward_anchored":
         return inv_poses_abs[0] @ poses_abs[frame_idx + 1]
+    if pose_convention == "world_framewise":
+        delta_T = np.eye(4, dtype=np.float32)
+        delta_T[:3, :3] = inv_poses_abs[frame_idx][:3, :3] @ poses_abs[frame_idx + 1][:3, :3]  # R_i^T @ R_{i+1}
+        delta_T[:3, 3] = poses_abs[frame_idx + 1][:3, 3] - poses_abs[frame_idx][:3, 3]  # world-frame Δp
+        return delta_T
     raise ValueError(
-        f"Unsupported pose_convention={pose_convention!r}. Expected one of: backward_framewise, backward_anchored."
+        f"Unsupported pose_convention={pose_convention!r}. Expected one of: "
+        "backward_framewise, backward_anchored, world_framewise."
     )
 
 
@@ -421,8 +427,14 @@ def _apply_relative_delta_transform(
         return current_pose @ delta_T
     if pose_convention == "backward_anchored":
         return initial_pose @ delta_T
+    if pose_convention == "world_framewise":
+        next_pose = np.eye(4, dtype=np.float32)
+        next_pose[:3, :3] = current_pose[:3, :3] @ delta_T[:3, :3]
+        next_pose[:3, 3] = current_pose[:3, 3] + delta_T[:3, 3]
+        return next_pose
     raise ValueError(
-        f"Unsupported pose_convention={pose_convention!r}. Expected one of: backward_framewise, backward_anchored."
+        f"Unsupported pose_convention={pose_convention!r}. Expected one of: "
+        "backward_framewise, backward_anchored, world_framewise."
     )
 
 

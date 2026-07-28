@@ -142,8 +142,11 @@ DCP checkpoints under `$RUN_DIR/checkpoints/iter_<N>/`.
 - `StretchLeRobotDataset` stores **absolute** end-effector pose per frame
   (`observation.state.cartesian_position`) and derives the 10-D relative
   `ee_pose` action at read time via `pose_utils.pose_abs_to_rel`
-  (`backward_framewise`, `rot6d`) — the same convention DROID's `ee_pose`
-  action space uses, but computed from Stretch's own state rather than ported
-  from the old `ego-moma` relative-action code.
+  (`world_framewise`, `rot6d`): rotation delta is `R_i^T @ R_{i+1}`, but the
+  translation delta stays in **world** axes (`p_{i+1} - p_i`, not rotated
+  into the current end-effector frame) — matching the convention validated in
+  ego-moma's `RobotDataset` (`transform_hand_trajectory_absolute_to_relative`).
+  This differs from DROID/Bridge/RoboMIND, which use body-frame
+  `backward_framewise` deltas.
 - `pnp_socks_human` (ARIA human hand-pose recordings) is out of scope for this
   recipe; only Stretch teleop episodes are converted.

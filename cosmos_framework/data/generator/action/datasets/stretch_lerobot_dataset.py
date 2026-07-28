@@ -11,8 +11,13 @@ gripper state — not a pre-computed delta — matching how
 ``DROIDLeRobotDataset``'s ``ee_pose``/``midtrain`` action space works. The
 relative ``[pos_delta(3), rot6d_delta(6), gripper(1)]`` action (10D) is derived
 at read time via ``pose_utils.build_abs_pose_from_components`` +
-``pose_utils.pose_abs_to_rel`` (``backward_framewise``), from a window of
-``chunk_length + 1`` consecutive states.
+``pose_utils.pose_abs_to_rel`` (``world_framewise``: rotation delta is
+``R_i^T @ R_{i+1}``, but translation delta stays in **world** axes, i.e.
+``p_{i+1} - p_i``, not rotated into the current end-effector frame), from a
+window of ``chunk_length + 1`` consecutive states. This matches the convention
+validated in ego-moma's ``RobotDataset``
+(``transform_hand_trajectory_absolute_to_relative``) — unlike DROID/Bridge/
+RoboMIND, which stay on body-frame ``backward_framewise`` deltas.
 
 The data is produced by ``cosmos_framework.scripts.convert_stretch_to_lerobot``,
 which converts raw Stretch teleop episodes (per-frame PNG + npz) into this
@@ -87,7 +92,7 @@ class StretchLeRobotDataset(ActionBaseDataset):
             fps=fps,
             chunk_length=chunk_length,
             mode=mode,
-            pose_convention="backward_framewise",
+            pose_convention="world_framewise",
             tolerance_s=tolerance_s,
             viewpoint=_VIEWPOINT_BY_CAMERA[camera_mode],
             action_normalization=action_normalization,
@@ -246,7 +251,7 @@ class StretchLeRobotDataset(ActionBaseDataset):
 
     def _build_action(self, state_window: np.ndarray, gripper_window: np.ndarray) -> torch.Tensor:
         poses_abs = build_abs_pose_from_components(state_window[:, 0:3], state_window[:, 3:6], "euler_xyz")
-        poses_rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="backward_framewise")
+        poses_rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="world_framewise")
         gripper = gripper_window[1:]  # the gripper value reached by each transition, i.e. window[1:]
         action = np.concatenate([poses_rel, gripper], axis=-1)  # [chunk_length, 10]
         return torch.from_numpy(np.ascontiguousarray(action)).float()
