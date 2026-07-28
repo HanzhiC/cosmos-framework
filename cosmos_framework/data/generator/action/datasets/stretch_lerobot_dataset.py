@@ -79,6 +79,7 @@ class StretchLeRobotDataset(ActionBaseDataset):
         val_ratio: float = 0.02,
         seed: int = 0,
         sample_stride: int = 1,
+        mask_action: bool = False,
     ) -> None:
         if camera_mode not in _VIEWPOINT_BY_CAMERA:
             raise ValueError(f"Unsupported camera_mode={camera_mode!r}. Use head_rgb/gripper_rgb/concat_view.")
@@ -106,6 +107,7 @@ class StretchLeRobotDataset(ActionBaseDataset):
         self._camera_mode = camera_mode
         self._image_size = int(image_size)
         self._embodiment_type = embodiment_type
+        self._mask_action = bool(mask_action)
 
         if self._camera_mode == "head_rgb":
             self._video_keys = [_HEAD_CAMERA]
@@ -246,6 +248,17 @@ class StretchLeRobotDataset(ActionBaseDataset):
         if self._camera_mode == "concat_view":
             extras["additional_view_description"] = (
                 "The left half shows the head camera view; the right half shows the gripper-mounted camera."
+            )
+        if self._mask_action:
+            # Video-only SFT: zero the action fed to the model (inert conditioning),
+            # but keep idle-frame captioning truthful by computing it from the real action.
+            return self._build_result(
+                mode=mode,
+                video=video,
+                action=torch.zeros_like(action),
+                idle_frames_action=action,
+                ai_caption=ai_caption,
+                **extras,
             )
         return self._build_result(mode=mode, video=video, action=action, ai_caption=ai_caption, **extras)
 

@@ -193,9 +193,14 @@ class ActionBaseDataset(ABC, Dataset):
         video: torch.Tensor,
         action: torch.Tensor,
         ai_caption: str,
+        idle_frames_action: torch.Tensor | None = None,
         **extras: Any,
     ) -> dict[str, Any]:
-        idle_frames = self._compute_idle_frames(action)
+        # `idle_frames_action` lets a caller pass the real (pre-masking) action for
+        # idle-frame text purposes while `action` itself has already been zeroed
+        # (e.g. video-only SFT) — otherwise every masked sample would be captioned
+        # as fully idle, which is wrong.
+        idle_frames = self._compute_idle_frames(idle_frames_action if idle_frames_action is not None else action)
         # action_normalization=None -> use raw actions (no normalization), e.g. joint_pos.
         if self.action_normalization is None:
             normalized_action = action

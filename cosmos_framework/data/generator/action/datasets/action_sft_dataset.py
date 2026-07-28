@@ -19,8 +19,8 @@ from typing import Any
 
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
-from cosmos_framework.data.generator.action.datasets.droid_merged_lerobot_dataset import DROIDMergedLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
+from cosmos_framework.data.generator.action.datasets.droid_merged_lerobot_dataset import DROIDMergedLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.stretch_lerobot_dataset import StretchLeRobotDataset
 from cosmos_framework.data.generator.action.transforms import ActionTransformPipeline
@@ -236,6 +236,7 @@ def get_action_stretch_fd_sft_dataset(
     format_prompt_as_json: bool = True,
     iterable_shuffle: bool = False,
     episode_shuffle_seed: int = 42,
+    mask_action: bool = False,
 ) -> Dataset:
     """Build the Stretch action forward-dynamics SFT dataset.
 
@@ -244,6 +245,10 @@ def get_action_stretch_fd_sft_dataset(
     through ``ActionTransformPipeline``. ``root`` is a LOCAL LeRobot dir produced by
     ``cosmos_framework.scripts.convert_stretch_to_lerobot`` (there is no upstream
     pre-converted Stretch dataset, unlike DROID/LIBERO).
+
+    ``mask_action=True`` zeros the action fed to the model (used by the video-only
+    ``video_sft_stretch_posttrain`` recipe to reuse this dataset/pipeline without any
+    real action conditioning); idle-frame captioning still reflects the real action.
     """
     dataset = StretchLeRobotDataset(
         root=root,
@@ -256,6 +261,7 @@ def get_action_stretch_fd_sft_dataset(
         split=split,
         val_ratio=val_ratio,
         seed=seed,
+        mask_action=mask_action,
     )
     transform = ActionTransformPipeline(
         tokenizer_config=tokenizer_config,

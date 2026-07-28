@@ -37,7 +37,7 @@ them into a single LeRobotDataset v3.0 root:
 
 ```shell
 PYTHONPATH=. python -m cosmos_framework.scripts.convert_stretch_to_lerobot \
-  --out-root /path/to/Stretch-LeRobot
+  --out-root /home/wiss/chenh/storage/group/srl/stretch_dataset_final_lerobot
 ```
 
 By default this reads raw episodes from `/home/wiss/chenh/storage/group/srl/stretch_dataset_final`
@@ -61,7 +61,7 @@ PYTHONPATH=. python -m cosmos_framework.scripts.convert_stretch_to_lerobot \
 Set `DATASET_PATH` to the converted Stretch-LeRobot root:
 
 ```shell
-export DATASET_PATH=/path/to/Stretch-LeRobot
+export DATASET_PATH=/home/wiss/chenh/storage/group/srl/stretch_dataset_final_lerobot
 ```
 
 ```text
@@ -75,14 +75,15 @@ $DATASET_PATH/
 
 ```shell
 # Step 1: convert raw Stretch episodes -> $DATASET_PATH (see above).
-export DATASET_PATH=examples/data/Stretch-LeRobot
+export DATASET_PATH=/home/wiss/chenh/storage/group/srl/stretch_dataset_final_lerobot
 
-# Step 2: point to the base DCP checkpoint and Wan2.2 VAE.
+# Step 2: point to the base DCP checkpoint and Wan2.2 VAE
+# (both produced by docs/training.md Step 1/2 — these are the launcher's defaults).
 export BASE_CHECKPOINT_PATH=examples/checkpoints/Cosmos3-Nano
-export WAN_VAE_PATH=/path/to/Wan2.2_VAE.pth
+export WAN_VAE_PATH=examples/checkpoints/wan22_vae/Wan2.2_VAE.pth
 
 # Step 3: choose the output root and launch.
-export IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root
+export IMAGINAIRE_OUTPUT_ROOT=outputs/train
 export LD_LIBRARY_PATH=''
 
 bash examples/launch_sft_action_fd_stretch_posttrain.sh
