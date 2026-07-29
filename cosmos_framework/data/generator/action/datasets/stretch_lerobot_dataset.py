@@ -12,18 +12,27 @@ poses — not a pre-computed delta — matching how ``DROIDLeRobotDataset``'s
 ``dex_traj``'s ``history_trajectory[-1]``) and ``action.cartesian_position``
 (the *one-step teleop-commanded target* pose, ``dex_traj``'s ``trajectory[0]``)
 — plus matching ``*.gripper_position`` scalars for each. The relative
-``[pos_delta(3), rot6d_delta(6), gripper(1)]`` action (10D) for step ``i`` is
-derived at read time as the delta from that frame's own current state to its
-own commanded target (not from consecutive *states*, i.e. not
+``[pos_delta(3), rot6d_delta(6), gripper(1)]`` action (10D) for step ``i`` in
+a chunk is derived at read time as the delta from a single **anchor** state —
+``self._row_state[start]``, the chunk's first frame — to that step's own
+commanded target (``action_state_window[i]``), NOT a per-step framewise delta
+(i.e. not ``state[i] -> target[i]`` re-anchored every step, and not
 ``state[i] -> state[i+1]``) via ``pose_utils.build_abs_pose_from_components`` +
 ``pose_utils.pose_abs_to_rel`` (``world_framewise``: rotation delta is
-``R_i^T @ R_target``, but translation delta stays in **world** axes, i.e.
-``p_target - p_i``, not rotated into the current end-effector frame). This
+``R_anchor^T @ R_target[i]``, but translation delta stays in **world** axes,
+i.e. ``p_target[i] - p_anchor``, not rotated into the anchor's frame). This
 matches the convention validated in ego-moma's ``RobotDataset``
 (``transform_hand_trajectory_absolute_to_relative``) — unlike DROID/Bridge/
 RoboMIND, which stay on body-frame ``backward_framewise`` deltas. Using the
 teleop's own commanded target (rather than the next *realized* state) avoids
 baking control-loop settling lag into the action.
+
+Each sample also carries ``history_proprio``: up to ``history_length`` past
+``[observation.state.cartesian_position, observation.state.gripper_position]``
+frames (``[<=history_length, 7]``), with the chunk's own current state as the
+LAST row — fewer rows are returned near an episode's start (clamped, not
+padded), mirroring how ``DROIDLeRobotDataset`` returns a variable-length
+``history_action``.
 
 The data is produced by ``cosmos_framework.scripts.convert_stretch_to_lerobot``,
 which converts raw Stretch teleop episodes (per-frame PNG + npz) into this
@@ -89,6 +98,7 @@ class StretchLeRobotDataset(ActionBaseDataset):
         sample_stride: int = 1,
         mask_action: bool = False,
         center_crop: bool = False,
+        history_length: int = 15,
     ) -> None:
         if camera_mode not in _VIEWPOINT_BY_CAMERA:
             raise ValueError(f"Unsupported camera_mode={camera_mode!r}. Use head_rgb/gripper_rgb/concat_view.")
@@ -118,6 +128,9 @@ class StretchLeRobotDataset(ActionBaseDataset):
         self._embodiment_type = embodiment_type
         self._mask_action = bool(mask_action)
         self._center_crop = bool(center_crop)
+        if history_length < 1:
+            raise ValueError(f"history_length must be >= 1, got {history_length}.")
+        self._history_length = int(history_length)
 
         if self._camera_mode == "head_rgb":
             self._video_keys = [_HEAD_CAMERA]
@@ -264,18 +277,27 @@ class StretchLeRobotDataset(ActionBaseDataset):
         timestamps = [float(self._row_timestamp[j]) for j in range(start, stop)]
         video = self._load_video(episode, timestamps)
 
-        # One action per frame (not per consecutive-frame pair): each of the first
-        # chunk_length frames already carries its own current state and its own
-        # one-step teleop-commanded target.
-        state_window = self._row_state[start : start + self._chunk_length]  # [chunk, 6] xyz+euler_xyz
+        # Every action step in the chunk is relative to the SAME anchor: the
+        # current state at the start of the chunk (not each step's own current
+        # state) — an "anchored" encoding rather than a per-step framewise one.
+        anchor_state = self._row_state[start]  # [6] xyz+euler_xyz
         action_state_window = self._row_action_state[start : start + self._chunk_length]  # [chunk, 6]
         action_gripper_window = self._row_action_gripper[start : start + self._chunk_length]  # [chunk, 1]
-        action = self._build_action(state_window, action_state_window, action_gripper_window)
+        action = self._build_action(anchor_state, action_state_window, action_gripper_window)
+
+        ep_start_row = int(self._ep_starts[ep])
+        num_past = min(self._history_length - 1, start - ep_start_row)
+        hist_start = start - num_past
+        history_state = self._row_state[hist_start : start + 1]  # [<=history_length, 6], last row = current
+        history_gripper = self._row_gripper[hist_start : start + 1]  # [<=history_length, 1]
+        history_proprio = torch.from_numpy(
+            np.ascontiguousarray(np.concatenate([history_state, history_gripper], axis=-1))
+        ).float()  # [<=history_length, 7]
 
         task = self._tasks[int(self._row_task[start])]
         ai_caption = random.choice([p.strip() for p in task.split(" | ") if p.strip()] or [task])
 
-        extras: dict[str, Any] = {}
+        extras: dict[str, Any] = {"history_proprio": history_proprio}
         if self._camera_mode == "concat_view":
             extras["additional_view_description"] = (
                 "The left half shows the head camera view; the right half shows the gripper-mounted camera."
@@ -295,23 +317,25 @@ class StretchLeRobotDataset(ActionBaseDataset):
 
     def _build_action(
         self,
-        state_window: np.ndarray,
+        anchor_state: np.ndarray,
         action_state_window: np.ndarray,
         action_gripper_window: np.ndarray,
     ) -> torch.Tensor:
-        poses_state = build_abs_pose_from_components(state_window[:, 0:3], state_window[:, 3:6], "euler_xyz")
+        anchor_pose = build_abs_pose_from_components(anchor_state[None, 0:3], anchor_state[None, 3:6], "euler_xyz")[0]
         poses_target = build_abs_pose_from_components(
             action_state_window[:, 0:3], action_state_window[:, 3:6], "euler_xyz"
         )
+        chunk_length = len(poses_target)
+        poses_anchor = np.repeat(anchor_pose[None], chunk_length, axis=0)
         # pose_abs_to_rel only encodes deltas between CONSECUTIVE entries of one
-        # trajectory, so interleave [state_0, target_0, state_1, target_1, ...] and
-        # keep every other output — the state[i] -> target[i] deltas — discarding
-        # the target[i] -> state[i+1] deltas we don't want.
-        interleaved = np.empty((2 * len(poses_state), 4, 4), dtype=poses_state.dtype)
-        interleaved[0::2] = poses_state
+        # trajectory, so interleave [anchor, target_0, anchor, target_1, ...] and
+        # keep every other output — the anchor -> target[i] deltas — discarding
+        # the target[i] -> anchor deltas we don't want.
+        interleaved = np.empty((2 * chunk_length, 4, 4), dtype=poses_anchor.dtype)
+        interleaved[0::2] = poses_anchor
         interleaved[1::2] = poses_target
         poses_rel_all = pose_abs_to_rel(interleaved, rotation_format="rot6d", pose_convention="world_framewise")
-        poses_rel = poses_rel_all[0::2]  # [chunk_length, 9]: state[i] -> target[i]
+        poses_rel = poses_rel_all[0::2]  # [chunk_length, 9]: anchor -> target[i]
         action = np.concatenate([poses_rel, action_gripper_window], axis=-1)  # [chunk_length, 10]
         return torch.from_numpy(np.ascontiguousarray(action)).float()
 
