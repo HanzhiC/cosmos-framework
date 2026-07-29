@@ -80,6 +80,7 @@ class StretchLeRobotDataset(ActionBaseDataset):
         seed: int = 0,
         sample_stride: int = 1,
         mask_action: bool = False,
+        center_crop: bool = False,
     ) -> None:
         if camera_mode not in _VIEWPOINT_BY_CAMERA:
             raise ValueError(f"Unsupported camera_mode={camera_mode!r}. Use head_rgb/gripper_rgb/concat_view.")
@@ -108,6 +109,7 @@ class StretchLeRobotDataset(ActionBaseDataset):
         self._image_size = int(image_size)
         self._embodiment_type = embodiment_type
         self._mask_action = bool(mask_action)
+        self._center_crop = bool(center_crop)
 
         if self._camera_mode == "head_rgb":
             self._video_keys = [_HEAD_CAMERA]
@@ -281,12 +283,30 @@ class StretchLeRobotDataset(ActionBaseDataset):
                 [from_ts + ts for ts in timestamps],
                 self._tolerance_s,
             )  # [T, C, H, W] in [0, 1]
+            if self._center_crop:
+                frames = self._crop_to_square(frames)
             frames = self._resize(frames)
             frames_by_view[key] = frames
         if self._camera_mode == "concat_view":
             # head (left) + gripper (right), horizontally concatenated -> [T, C, H, 2W]
             return torch.cat([frames_by_view[_HEAD_CAMERA], frames_by_view[_GRIPPER_CAMERA]], dim=-1)
         return frames_by_view[self._video_keys[0]]
+
+    @staticmethod
+    def _crop_to_square(frames: torch.Tensor) -> torch.Tensor:
+        """Center-crop [T, C, H, W] frames to a square on the shorter side.
+
+        Stretch's raw ``head_rgb`` (320x240, portrait) and ``gripper_rgb``
+        (240x320, landscape) frames are non-square, so the plain
+        ``F.interpolate``-to-square in ``_resize`` would squash/distort them.
+        Cropping first (like ``imaginaire.webdataset.augmentors.image.cropping.CenterCrop``)
+        preserves aspect ratio at the cost of trimming the long side.
+        """
+        h, w = frames.shape[-2], frames.shape[-1]
+        side = min(h, w)
+        top = (h - side) // 2
+        left = (w - side) // 2
+        return frames[..., top : top + side, left : left + side]
 
     def _resize(self, frames: torch.Tensor) -> torch.Tensor:
         if frames.shape[-1] == self._image_size and frames.shape[-2] == self._image_size:

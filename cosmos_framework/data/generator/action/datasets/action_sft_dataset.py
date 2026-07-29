@@ -237,6 +237,7 @@ def get_action_stretch_fd_sft_dataset(
     iterable_shuffle: bool = False,
     episode_shuffle_seed: int = 42,
     mask_action: bool = False,
+    center_crop: bool = False,
 ) -> Dataset:
     """Build the Stretch action forward-dynamics SFT dataset.
 
@@ -249,6 +250,11 @@ def get_action_stretch_fd_sft_dataset(
     ``mask_action=True`` zeros the action fed to the model (used by the video-only
     ``video_sft_stretch_posttrain`` recipe to reuse this dataset/pipeline without any
     real action conditioning); idle-frame captioning still reflects the real action.
+
+    ``center_crop=True`` center-crops each camera view to a square (on the shorter
+    side) before resizing, avoiding the aspect-ratio distortion from squash-resizing
+    Stretch's non-square raw frames (``head_rgb`` 320x240 portrait, ``gripper_rgb``
+    240x320 landscape) directly to ``image_size``x``image_size``.
     """
     dataset = StretchLeRobotDataset(
         root=root,
@@ -262,6 +268,7 @@ def get_action_stretch_fd_sft_dataset(
         val_ratio=val_ratio,
         seed=seed,
         mask_action=mask_action,
+        center_crop=center_crop,
     )
     transform = ActionTransformPipeline(
         tokenizer_config=tokenizer_config,
