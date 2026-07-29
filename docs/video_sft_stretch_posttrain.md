@@ -156,3 +156,60 @@ DCP checkpoints under `$RUN_DIR/checkpoints/iter_<N>/`.
 - Both this recipe and `action_fd_stretch_posttrain`/`action_wam_stretch_posttrain`
   read the same `DATASET_PATH` — no separate conversion needed if you've
   already run Step 1 for one of them.
+
+## Cosmos3-Edge + LoRA variant (single ~48GB GPU)
+
+`video_sft_stretch_edge_lora_posttrain` is a lighter sibling recipe aimed at
+fitting a single ~48GB GPU, since the recipe above (Nano backbone, full
+fine-tune) is only validated on multi-GPU FSDP. It swaps in `EDGE_MODEL_CONFIG`
+(Nemotron-2B-Dense-VL, ~4x smaller than Nano's Qwen3-VL-8B) and enables LoRA
+(`lora_enabled=True`, rank 16, targeting the generation backbone's
+`q/k/v/o_proj_moe_gen` — same knobs as `vision_sft_super`'s LoRA recipe).
+`optimizer.keys_to_select=["lora_"]`: only the small adapter matrices train,
+so FusedAdam's fp32 master-weight/momentum/variance state is paid only for the
+adapters, not the whole model — LoRA doesn't shrink the frozen base-weight or
+activation memory, just the optimizer-state/gradient footprint, which is
+usually the dominant cost for full fine-tuning.
+
+| Piece          | Value                                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------------------- |
+| Experiment      | `video_sft_stretch_edge_lora_posttrain`                                                              |
+| TOML            | `examples/toml/sft_config/video_sft_stretch_edge_lora_posttrain.toml`                                |
+| Launch shell    | `examples/launch_sft_video_sft_stretch_edge_lora_posttrain.sh`                                       |
+| Config module   | `cosmos_framework/configs/base/experiment/action/posttrain_config/video_sft_stretch_edge_lora_posttrain.py` |
+| Base checkpoint | `Cosmos3-Edge` (not `Cosmos3-Nano`) — convert separately: `BASE_CHECKPOINT_NAME=Cosmos3-Edge`         |
+| Resolution / tokens | `480` / `max_num_tokens_after_packing=45056` — **Edge's own lighter defaults**, deliberately NOT the 720p/74000-token settings the Nano-based recipes above use |
+| Activation checkpointing | `"full"` (max memory savings) — not `"selective"`                                            |
+| Parallelism     | `data_parallel_shard_degree=1`, single GPU (`NPROC_PER_NODE=1`)                                       |
+
+```shell
+# Step 1: same DATASET_PATH as the other Stretch recipes.
+export DATASET_PATH=/home/wiss/chenh/storage/group/srl/stretch_dataset_final_lerobot
+
+# Step 2: convert Cosmos3-Edge (not Cosmos3-Nano) to DCP.
+BASE_CHECKPOINT_NAME=Cosmos3-Edge
+python -m cosmos_framework.scripts.convert_model_to_dcp \
+  -o examples/checkpoints/$BASE_CHECKPOINT_NAME \
+  --checkpoint-path $BASE_CHECKPOINT_NAME
+export BASE_CHECKPOINT_PATH=examples/checkpoints/Cosmos3-Edge
+export WAN_VAE_PATH=examples/checkpoints/wan22_vae/Wan2.2_VAE.pth
+
+# Step 3: single-GPU smoke run.
+export IMAGINAIRE_OUTPUT_ROOT=outputs/train
+export LD_LIBRARY_PATH=''
+export NPROC_PER_NODE=1
+export EXTRA_TAIL_OVERRIDES="trainer.max_iter=10 checkpoint.save_iter=10"
+bash examples/launch_sft_video_sft_stretch_edge_lora_posttrain.sh
+```
+
+**Unvalidated — treat as a starting point for an empirical smoke test, not a
+known-good config.** Nobody has measured actual peak GPU memory for this
+recipe (or for Edge+LoRA at all) in this repo. If it OOMs on your 48GB card,
+try in order:
+1. Lower `dataloader_train.max_sequence_length` below 45056 via
+   `EXTRA_TAIL_OVERRIDES="dataloader_train.max_sequence_length=<N>"`.
+2. Reduce `chunk_length` (currently 16) — requires editing the experiment
+   Python's dataset factory call, not just a Hydra override.
+3. Disable the `compile_tokenizer` callback
+   (`trainer.callbacks.compile_tokenizer.enabled=false`) — `torch.compile`
+   warmup can spike memory transiently.

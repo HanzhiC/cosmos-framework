@@ -162,8 +162,8 @@ def _convert_episode(dataset, ep_dir: Path, meta: _EpisodeMeta, task_text: str) 
     for i in range(meta.start, meta.end + 1):
         head = np.array(Image.open(ep_dir / "head_rgb" / f"{i:06d}.png").convert("RGB"))
         gripper_img = np.array(Image.open(ep_dir / "gripper_rgb" / f"{i:06d}.png").convert("RGB"))
-        pose = np.load(ep_dir / "extr_cam0cam" / f"{i:06d}.npz")["T_base_eecam"]
-        gripper_val = float(np.load(ep_dir / "dex_traj" / f"{i:06d}.npz")["trajectory"][0, 16])
+        pose = np.load(ep_dir / "dex_traj" / f"{i:06d}.npz")["history_trajectory"][-1, :16].reshape(4, 4)
+        gripper_val = float(np.load(ep_dir / "dex_traj" / f"{i:06d}.npz")["history_trajectory"][-1, -1])
 
         dataset.add_frame(
             {

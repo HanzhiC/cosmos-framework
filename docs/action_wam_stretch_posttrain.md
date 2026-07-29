@@ -157,3 +157,70 @@ DCP checkpoints under `$RUN_DIR/checkpoints/iter_<N>/`.
   from frame 0, a third `mode="inverse_dynamics"` experiment would need to be
   registered the same way — not built here since the WAM framing is what was
   requested.
+
+## Cosmos3-Edge + LoRA variant (single ~48GB GPU)
+
+`action_wam_stretch_edge_lora_posttrain` is a lighter sibling recipe aimed at
+fitting a single ~48GB GPU, since the recipe above (Nano backbone, full
+fine-tune) is only validated on multi-GPU FSDP. It uses `EDGE_MODEL_CONFIG`
+(Nemotron-2B-Dense-VL, ~4x smaller than Nano's Qwen3-VL-8B) with a **hybrid**
+training scheme:
+
+- **LoRA** on the generation backbone (`lora_enabled=True`, rank 16, targeting
+  `q/k/v/o_proj_moe_gen` — same knobs as `vision_sft_super`'s LoRA recipe).
+- **Full fine-tuning** of the action heads (`action2llm`/`llm2action`/
+  `action_modality_embed`). These are tiny standalone modules (`cosmos3_vfm_network.py:157-160`:
+  a couple of small linear projections + one embedding vector), architecturally
+  separate from the LoRA-targeted attention projections — LoRA alone would give
+  the model no capacity to actually learn the action-prediction task WAM needs,
+  so they're kept fully trainable. Being small, this adds negligible extra
+  optimizer-state memory on top of the LoRA adapters.
+
+`optimizer.keys_to_select=["lora_", "action2llm", "llm2action", "action_modality_embed"]`
+— everything else (the frozen Edge backbone) is excluded.
+
+| Piece          | Value                                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------------------- |
+| Experiment      | `action_wam_stretch_edge_lora_posttrain`                                                                    |
+| TOML            | `examples/toml/sft_config/action_wam_stretch_edge_lora_posttrain.toml`                                      |
+| Launch shell    | `examples/launch_sft_action_wam_stretch_edge_lora_posttrain.sh`                                             |
+| Config module   | `cosmos_framework/configs/base/experiment/action/posttrain_config/action_wam_stretch_edge_lora_posttrain.py` |
+| Base checkpoint | `Cosmos3-Edge` (not `Cosmos3-Nano`) — convert separately: `BASE_CHECKPOINT_NAME=Cosmos3-Edge`               |
+| Resolution / tokens | `480` / `max_num_tokens_after_packing=45056` — Edge's own lighter defaults, NOT the 720p/74000-token settings the Nano-based recipe above uses |
+| Activation checkpointing | `"full"` (max memory savings) — not `"selective"`                                                  |
+| Parallelism     | `data_parallel_shard_degree=1`, single GPU (`NPROC_PER_NODE=1`)                                             |
+
+```shell
+# Step 1: same DATASET_PATH as the other Stretch recipes.
+export DATASET_PATH=/home/wiss/chenh/storage/group/srl/stretch_dataset_final_lerobot
+
+# Step 2: convert Cosmos3-Edge (not Cosmos3-Nano) to DCP.
+BASE_CHECKPOINT_NAME=Cosmos3-Edge
+python -m cosmos_framework.scripts.convert_model_to_dcp \
+  -o examples/checkpoints/$BASE_CHECKPOINT_NAME \
+  --checkpoint-path $BASE_CHECKPOINT_NAME
+export BASE_CHECKPOINT_PATH=examples/checkpoints/Cosmos3-Edge
+export WAN_VAE_PATH=examples/checkpoints/wan22_vae/Wan2.2_VAE.pth
+
+# Step 3: single-GPU smoke run.
+export IMAGINAIRE_OUTPUT_ROOT=outputs/train
+export LD_LIBRARY_PATH=''
+export NPROC_PER_NODE=1
+export EXTRA_TAIL_OVERRIDES="trainer.max_iter=10 checkpoint.save_iter=10"
+bash examples/launch_sft_action_wam_stretch_edge_lora_posttrain.sh
+```
+
+**Unvalidated — treat as a starting point for an empirical smoke test, not a
+known-good config.** Nobody has measured actual peak GPU memory for this
+recipe (or for this LoRA+full-tune hybrid at all) in this repo. Watch the
+action loss especially — the `lr_multipliers` on the action heads (5x the base
+LoRA `lr=5e-4`, so an effective ~2.5e-3) are inherited from the Nano WAM
+recipe's full-fine-tune tuning, not re-tuned for this hybrid scheme. If it
+OOMs on your 48GB card, try in order:
+1. Lower `dataloader_train.max_sequence_length` below 45056 via
+   `EXTRA_TAIL_OVERRIDES="dataloader_train.max_sequence_length=<N>"`.
+2. Reduce `chunk_length` (currently 16) — requires editing the experiment
+   Python's dataset factory call, not just a Hydra override.
+3. Disable the `compile_tokenizer` callback
+   (`trainer.callbacks.compile_tokenizer.enabled=false`) — `torch.compile`
+   warmup can spike memory transiently.

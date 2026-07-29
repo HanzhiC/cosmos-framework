@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# ============================================================================
+# Stretch LeRobot video-only (action-free) post-training — Cosmos3-Edge + LoRA,
+# tuned for a single ~48GB GPU. See docs/video_sft_stretch_posttrain.md
+# (Edge + LoRA section) for the full walkthrough and caveats.
+#
+# Env required:
+#   DATASET_PATH=/path/to/Stretch-LeRobot   (see cosmos_framework/scripts/convert_stretch_to_lerobot.py)
+#   BASE_CHECKPOINT_PATH=<Cosmos3-Edge DCP dir or object-store path>
+#   WAN_VAE_PATH=<Wan2.2_VAE.pth>
+#   IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root
+#
+# The registered experiment owns dataset/model wiring: EDGE_MODEL_CONFIG
+# (Nemotron-2B-Dense-VL), lora_enabled=True (rank 16, optimizer trains only
+# "lora_" keys), mode="forward_dynamics" + mask_action=True (video-only),
+# resolution=480, max_num_tokens_after_packing=45056 (Edge's own lighter
+# defaults, NOT the 720p/74000-token settings the Nano-based Stretch recipes
+# use) chunk_length=16.
+#
+# Single-GPU: data_parallel_shard_degree=1 below + NPROC_PER_NODE=1 at launch.
+# Unvalidated: nobody has measured actual peak memory for this recipe here —
+# treat it as a starting point for an empirical smoke test, not a known-good
+# config. If it OOMs, the next levers to pull (in order) are: lower
+# dataloader_train.max_sequence_length below 45056, reduce chunk_length below
+# 16, or drop the compile_tokenizer callback (enabled=false).
+# ============================================================================
+
+[job]
+task       = "vfm"
+experiment = "video_sft_stretch_edge_lora_posttrain"
+project    = "cosmos3_video_sft"
+group      = "sft"
+name       = "video_sft_stretch_edge_lora_posttrain"
+wandb_mode = "online"
+
+[model]
+precision = "bfloat16"
+
+[model.parallelism]
+data_parallel_shard_degree     = 1
+data_parallel_replicate_degree = 1
+
+[model.activation_checkpointing]
+mode = "full"
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"
+
+[scheduler]
+cycle_lengths = [20000]
+
+[trainer]
+max_iter     = 20000
+logging_iter = 50
+
+[checkpoint]
+load_path = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter = 250
