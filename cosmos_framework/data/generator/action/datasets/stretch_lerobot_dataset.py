@@ -105,7 +105,7 @@ class StretchLeRobotDataset(ActionBaseDataset):
         sample_stride: int = 1,
         mask_action: bool = False,
         center_crop: bool = False,
-        history_length: int = 15,
+        history_length: int = 1,
     ) -> None:
         if camera_mode not in _VIEWPOINT_BY_CAMERA:
             raise ValueError(f"Unsupported camera_mode={camera_mode!r}. Use head_rgb/gripper_rgb/concat_view.")

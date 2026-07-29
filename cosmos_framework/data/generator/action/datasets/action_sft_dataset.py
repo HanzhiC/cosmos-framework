@@ -238,6 +238,7 @@ def get_action_stretch_fd_sft_dataset(
     episode_shuffle_seed: int = 42,
     mask_action: bool = False,
     center_crop: bool = False,
+    history_length: int = 1,
 ) -> Dataset:
     """Build the Stretch action forward-dynamics SFT dataset.
 
@@ -255,6 +256,11 @@ def get_action_stretch_fd_sft_dataset(
     side) before resizing, avoiding the aspect-ratio distortion from squash-resizing
     Stretch's non-square raw frames (``head_rgb`` 320x240 portrait, ``gripper_rgb``
     240x320 landscape) directly to ``image_size``x``image_size``.
+
+    ``history_length`` is ``StretchLeRobotDataset``'s past-proprio window size fed
+    to the model as ``history_action`` conditioning (see that class's docstring);
+    the default of 1 means only the chunk's own current state is emitted, which is
+    ~0 after anchor-relative encoding, i.e. no real history.
     """
     dataset = StretchLeRobotDataset(
         root=root,
@@ -269,6 +275,7 @@ def get_action_stretch_fd_sft_dataset(
         seed=seed,
         mask_action=mask_action,
         center_crop=center_crop,
+        history_length=history_length,
     )
     transform = ActionTransformPipeline(
         tokenizer_config=tokenizer_config,

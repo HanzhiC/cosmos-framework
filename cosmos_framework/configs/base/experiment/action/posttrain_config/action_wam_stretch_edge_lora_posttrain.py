@@ -181,7 +181,7 @@ action_wam_stretch_edge_lora_posttrain = LazyDict(
             load_path="???",  # Cosmos3-Edge DCP dir; supply via TOML/env
             load_training_state=False,
             only_load_scheduler_state=False,
-            save_iter=250,
+            save_iter=500,
             strict_resume=True,
             verbose=True,
         ),

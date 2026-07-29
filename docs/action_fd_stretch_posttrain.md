@@ -71,6 +71,36 @@ $DATASET_PATH/
 └── videos/observation.images.{head_rgb,gripper_rgb}/chunk-*/file-*.mp4
 ```
 
+## Compute Action Normalization Stats
+
+Both Stretch recipes (`action_fd_stretch_posttrain` and
+`action_wam_stretch_posttrain`) currently pass `action_normalization=None` to
+`StretchLeRobotDataset` — i.e. they train on raw, un-normalized 10-D
+`ee_pose` actions, since no normalizer stats had been computed for Stretch
+before now (unlike DROID/LIBERO, which ship bundled stats under
+`cosmos_framework/data/generator/action/normalizer_stats/`).
+
+`cosmos_framework/scripts/compute_stretch_action_stats.py` computes those
+stats: it walks every valid chunk of `StretchLeRobotDataset` on the `train`
+split (via the same anchor-relative `_build_action` the dataset itself uses,
+but reading the parquet-derived pose arrays directly — no video decode, so
+it's fast) and writes per-dimension `mean`/`std`/`min`/`max`/`q01`/`q99` to
+`cosmos_framework/data/generator/action/normalizer_stats/stretch_lerobot_ee_pose_rot6d.json`
+— the path `StretchLeRobotDataset._stats_path()` expects.
+
+```shell
+PYTHONPATH=. python -m cosmos_framework.scripts.compute_stretch_action_stats \
+  --root /home/wiss/chenh/storage/group/srl/stretch_dataset_final_lerobot
+```
+
+To actually use the stats, pass `action_normalization="quantile"` (rather
+than `None`) to `get_action_stretch_fd_sft_dataset` in the experiment config
+module (or `action_wam_stretch_posttrain.py` / the edge-LoRA variant) — the
+default `"quantile"` method rescales each dimension to roughly `[-1, 1]`
+using `q01`/`q99`. Re-run this script whenever the underlying dataset
+(`DATASET_PATH`) changes materially, since the stats are specific to that
+data distribution.
+
 ## Full Reproduction
 
 ```shell

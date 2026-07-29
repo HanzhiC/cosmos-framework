@@ -57,6 +57,13 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         ("dataloader_train", "max_caption_tokens"): (
             "dataloader_train", "dataloader", "datasets", "video", "dataset", "max_caption_tokens",
         ),
+        # Action-normalization lives on the nested Stretch dataset, not a top-level
+        # dataloader scalar — route it to the get_action_stretch_fd_sft_dataset node.
+        # Hardcoded to the "stretch" dataset-dict key, like the "video" hardcode
+        # above — only valid for the Stretch action recipes.
+        ("dataloader_train", "action_normalization"): (
+            "dataloader_train", "dataloader", "datasets", "stretch", "dataset", "action_normalization",
+        ),
         ("model",): ("model", "config"),
     },
     # VLM (VLMModelConfig): model.config.{parallelism, compile,
@@ -90,6 +97,7 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         ("dataloader_train", "max_samples_per_batch"): ("dataloader_train", "batcher", "max_batch_size"),
         ("dataloader_train", "max_sequence_length"): ("dataloader_train", "batcher", "max_tokens"),
         ("dataloader_train", "max_caption_tokens"): None,                       # VFM-only knob — VLM packer caps via max_sequence_length
+        ("dataloader_train", "action_normalization"): None,                     # VFM Stretch-only knob — no VLM analog
         # Catch-all for any other model.* sub-keys
         ("model",): ("model", "config"),
     },

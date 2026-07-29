@@ -191,6 +191,7 @@ action_fd_stretch_posttrain = LazyDict(
                             chunk_length=16,
                             mode="forward_dynamics",
                             camera_mode="concat_view",
+                            history_length=4,
                             split="train",
                             iterable_shuffle=True,
                             episode_shuffle_seed=42,

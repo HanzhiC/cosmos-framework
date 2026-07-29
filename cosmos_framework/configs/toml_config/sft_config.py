@@ -656,6 +656,21 @@ class DataloaderTrainConfig(BaseModel):
             "recipe default. Skipped on VLM (the data packer caps via max_sequence_length)."
         ),
     )
+    action_normalization: Optional[str] = Field(
+        default=None,
+        description=(
+            "VFM only, Stretch action recipes only ('action_fd_stretch_posttrain' / "
+            "'action_wam_stretch_posttrain' / 'action_wam_stretch_edge_lora_posttrain') — "
+            "remapped to the nested StretchLeRobotDataset's 'action_normalization' "
+            "('dataloader_train.dataloader.datasets.stretch.dataset.action_normalization'). "
+            "None = raw, un-normalized actions (the recipe default); "
+            "'quantile' rescales each action dim to ~[-1, 1] using the bundled "
+            "'stretch_lerobot_ee_pose_rot6d.json' q01/q99 stats (see "
+            "cosmos_framework/scripts/compute_stretch_action_stats.py). Setting this on a "
+            "non-Stretch VFM recipe (whose dataset dict key isn't 'stretch') will fail at "
+            "Hydra-compose time with a key-not-found error."
+        ),
+    )
     seed: int = Field(
         default=42,
         description=(

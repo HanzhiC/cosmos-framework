@@ -37,6 +37,11 @@ mode = "selective"
 [model.tokenizer]
 vae_path = "${oc.env:WAN_VAE_PATH}"
 
+[dataloader_train]
+# "quantile" rescales each of the 10 ee_pose action dims to ~[-1, 1] using the
+# bundled q01/q99 stats (cosmos_framework/scripts/compute_stretch_action_stats.py).
+action_normalization = "quantile"
+
 [scheduler]
 cycle_lengths = [20000]
 

@@ -151,7 +151,10 @@ DCP checkpoints under `$RUN_DIR/checkpoints/iter_<N>/`.
   for the full rationale.
 - Both `action_fd_stretch_posttrain` and `action_wam_stretch_posttrain` read
   the exact same `DATASET_PATH` — no separate conversion needed if you've
-  already run Step 1 for one of them.
+  already run Step 1 for one of them. They also share the same action
+  normalizer stats file — see
+  [`docs/action_fd_stretch_posttrain.md` → Compute Action Normalization Stats](./action_fd_stretch_posttrain.md#compute-action-normalization-stats)
+  to compute it and enable `action_normalization="quantile"` here too.
 - To reproduce inverse-dynamics-style pure policy inference (given the full
   video, predict actions) rather than WAM's joint video+action generation
   from frame 0, a third `mode="inverse_dynamics"` experiment would need to be
