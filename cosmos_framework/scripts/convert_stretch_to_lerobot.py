@@ -7,9 +7,10 @@ episode, timestamp-named e.g. ``2026-03-26--20-53-22``):
 
     <raw_root>/<task>/<episode>/
         head_rgb/{frame:06d}.png        gripper_rgb/{frame:06d}.png
-        extr_cam0cam/{frame:06d}.npz    {"T_base_eecam": (4,4), "T_base_headcam": (4,4)}
-        dex_traj/{frame:06d}.npz        {"trajectory": (30,17), ...}; row 0's last
-                                         column is that frame's gripper closure.
+        dex_traj/{frame:06d}.npz        {"history_trajectory": (H+1,17), ...}; row -1 is
+                                         that frame's current state — cols [:16] are the
+                                         flattened 4x4 ``T_base_eecam`` pose, col -1 is the
+                                         gripper closure.
         success.txt                     "Success" | "Failure" (not always present)
 
 Per episode, per frame ``i`` this writes:
@@ -144,7 +145,6 @@ def _episode_files_present(ep_dir: Path, start: int, end: int) -> bool:
         if not (
             (ep_dir / "head_rgb" / f"{i:06d}.png").exists()
             and (ep_dir / "gripper_rgb" / f"{i:06d}.png").exists()
-            and (ep_dir / "extr_cam0cam" / f"{i:06d}.npz").exists()
             and (ep_dir / "dex_traj" / f"{i:06d}.npz").exists()
         ):
             return False
@@ -162,8 +162,8 @@ def _convert_episode(dataset, ep_dir: Path, meta: _EpisodeMeta, task_text: str) 
     for i in range(meta.start, meta.end + 1):
         head = np.array(Image.open(ep_dir / "head_rgb" / f"{i:06d}.png").convert("RGB"))
         gripper_img = np.array(Image.open(ep_dir / "gripper_rgb" / f"{i:06d}.png").convert("RGB"))
-        pose = np.load(ep_dir / "extr_cam0cam" / f"{i:06d}.npz")["T_base_eecam"]
-        gripper_val = float(np.load(ep_dir / "dex_traj" / f"{i:06d}.npz")["trajectory"][0, 16])
+        pose = np.load(ep_dir / "dex_traj" / f"{i:06d}.npz")["history_trajectory"][-1, :16].reshape(4, 4)
+        gripper_val = float(np.load(ep_dir / "dex_traj" / f"{i:06d}.npz")["history_trajectory"][-1, -1])
 
         dataset.add_frame(
             {
