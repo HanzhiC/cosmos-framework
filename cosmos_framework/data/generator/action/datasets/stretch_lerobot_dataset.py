@@ -27,12 +27,19 @@ RoboMIND, which stay on body-frame ``backward_framewise`` deltas. Using the
 teleop's own commanded target (rather than the next *realized* state) avoids
 baking control-loop settling lag into the action.
 
-Each sample also carries ``history_proprio``: up to ``history_length`` past
-``[observation.state.cartesian_position, observation.state.gripper_position]``
-frames (``[<=history_length, 7]``), with the chunk's own current state as the
-LAST row — fewer rows are returned near an episode's start (clamped, not
-padded), mirroring how ``DROIDLeRobotDataset`` returns a variable-length
-``history_action``.
+Each sample also carries ``history_action``: up to ``history_length`` past
+``observation.state.*`` (proprioceptive, NOT ``action.*``) frames, re-expressed
+in the same anchor-relative 10D format as ``action`` (i.e. each past state's
+delta from the same ``self._row_state[start]`` anchor, plus its own raw
+gripper reading) rather than as raw absolute poses — with the chunk's own
+current state as the LAST row (whose delta is therefore ~0, since it *is* the
+anchor). Fewer rows are returned near an episode's start (clamped, not
+padded). This reuses ``DROIDLeRobotDataset``'s ``history_action``/``use_state``
+key verbatim — ``transforms.py`` already pops ``history_action`` and prepends
+it onto ``action`` as conditioning frames for any action dataset, so no model
+or transform-pipeline changes are needed to make Stretch's proprio history
+reach the model; only the *source* differs (past states here vs. past actions
+for DROID).
 
 The data is produced by ``cosmos_framework.scripts.convert_stretch_to_lerobot``,
 which converts raw Stretch teleop episodes (per-frame PNG + npz) into this
@@ -285,26 +292,32 @@ class StretchLeRobotDataset(ActionBaseDataset):
         action_gripper_window = self._row_action_gripper[start : start + self._chunk_length]  # [chunk, 1]
         action = self._build_action(anchor_state, action_state_window, action_gripper_window)
 
+        # Proprioceptive history, re-expressed in the SAME anchor-relative 10D
+        # format as `action` (not raw absolute poses) and emitted under the
+        # `history_action` key: `transforms.py` already pops that key and
+        # prepends it onto `action` as conditioning frames for every action
+        # dataset (see DROIDLeRobotDataset's `history_action`/`use_state`), so
+        # this needs no changes outside this file to reach the model.
         ep_start_row = int(self._ep_starts[ep])
         num_past = min(self._history_length - 1, start - ep_start_row)
         hist_start = start - num_past
-        history_state = self._row_state[hist_start : start + 1]  # [<=history_length, 6], last row = current
-        history_gripper = self._row_gripper[hist_start : start + 1]  # [<=history_length, 1]
-        history_proprio = torch.from_numpy(
-            np.ascontiguousarray(np.concatenate([history_state, history_gripper], axis=-1))
-        ).float()  # [<=history_length, 7]
+        history_state_window = self._row_state[hist_start : start + 1]  # [<=history_length, 6], last row = current
+        history_gripper_window = self._row_gripper[hist_start : start + 1]  # [<=history_length, 1]
+        history_action = self._build_action(anchor_state, history_state_window, history_gripper_window)
 
         task = self._tasks[int(self._row_task[start])]
         ai_caption = random.choice([p.strip() for p in task.split(" | ") if p.strip()] or [task])
 
-        extras: dict[str, Any] = {"history_proprio": history_proprio}
+        extras: dict[str, Any] = {"history_action": history_action}
         if self._camera_mode == "concat_view":
             extras["additional_view_description"] = (
                 "The left half shows the head camera view; the right half shows the gripper-mounted camera."
             )
         if self._mask_action:
-            # Video-only SFT: zero the action fed to the model (inert conditioning),
-            # but keep idle-frame captioning truthful by computing it from the real action.
+            # Video-only SFT: zero the action AND history fed to the model (inert
+            # conditioning), but keep idle-frame captioning truthful by computing
+            # it from the real action.
+            extras["history_action"] = torch.zeros_like(extras["history_action"])
             return self._build_result(
                 mode=mode,
                 video=video,
