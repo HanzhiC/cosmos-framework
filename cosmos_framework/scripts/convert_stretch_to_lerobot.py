@@ -7,10 +7,11 @@ episode, timestamp-named e.g. ``2026-03-26--20-53-22``):
 
     <raw_root>/<task>/<episode>/
         head_rgb/{frame:06d}.png        gripper_rgb/{frame:06d}.png
-        dex_traj/{frame:06d}.npz        {"history_trajectory": (H+1,17), ...}; row -1 is
-                                         that frame's current state — cols [:16] are the
-                                         flattened 4x4 ``T_base_eecam`` pose, col -1 is the
-                                         gripper closure.
+        dex_traj/{frame:06d}.npz        {"history_trajectory": (H+1,17), "trajectory": (30,17), ...};
+                                         both rows are ``[flattened 4x4 T_base_eecam pose (16), gripper
+                                         closure (1)]``. ``history_trajectory[-1]`` is that frame's
+                                         *current* state; ``trajectory[0]`` is that frame's one-step
+                                         *action* (the pose/closure the teleop command drives towards).
         success.txt                     "Success" | "Failure" (not always present)
 
 Per episode, per frame ``i`` this writes:
@@ -20,6 +21,8 @@ Per episode, per frame ``i`` this writes:
     decomposed from ``T_base_eecam`` (absolute end-effector pose in the robot's
     base/world frame; euler ``xyz``, radians).
   * ``observation.state.gripper_position`` — 1-D gripper closure.
+  * ``action.cartesian_position`` / ``action.gripper_position`` — same
+    decomposition, applied to ``trajectory[0]`` instead of ``history_trajectory[-1]``.
 
 The **absolute** pose is stored, not a pre-computed delta — matching how the
 DROID LeRobot conversion stores ``observation.state.cartesian_position`` and lets
@@ -162,8 +165,11 @@ def _convert_episode(dataset, ep_dir: Path, meta: _EpisodeMeta, task_text: str) 
     for i in range(meta.start, meta.end + 1):
         head = np.array(Image.open(ep_dir / "head_rgb" / f"{i:06d}.png").convert("RGB"))
         gripper_img = np.array(Image.open(ep_dir / "gripper_rgb" / f"{i:06d}.png").convert("RGB"))
-        pose = np.load(ep_dir / "dex_traj" / f"{i:06d}.npz")["history_trajectory"][-1, :16].reshape(4, 4)
-        gripper_val = float(np.load(ep_dir / "dex_traj" / f"{i:06d}.npz")["history_trajectory"][-1, -1])
+        dex_traj = np.load(ep_dir / "dex_traj" / f"{i:06d}.npz")
+        pose = dex_traj["history_trajectory"][-1, :16].reshape(4, 4)
+        gripper_val = float(dex_traj["history_trajectory"][-1, -1])
+        action_pose = dex_traj["trajectory"][0, :16].reshape(4, 4)
+        action_gripper_val = float(dex_traj["trajectory"][0, -1])
 
         dataset.add_frame(
             {
@@ -171,6 +177,8 @@ def _convert_episode(dataset, ep_dir: Path, meta: _EpisodeMeta, task_text: str) 
                 "observation.images.gripper_rgb": gripper_img,
                 "observation.state.cartesian_position": _pose_to_state(pose),
                 "observation.state.gripper_position": np.array([gripper_val], dtype=np.float32),
+                "action.cartesian_position": _pose_to_state(action_pose),
+                "action.gripper_position": np.array([action_gripper_val], dtype=np.float32),
                 "task": task_text,
             }
         )
@@ -218,6 +226,12 @@ def main(
             "names": ["x", "y", "z", "roll", "pitch", "yaw"],
         },
         "observation.state.gripper_position": {"dtype": "float32", "shape": (1,), "names": ["gripper"]},
+        "action.cartesian_position": {
+            "dtype": "float32",
+            "shape": (6,),
+            "names": ["x", "y", "z", "roll", "pitch", "yaw"],
+        },
+        "action.gripper_position": {"dtype": "float32", "shape": (1,), "names": ["gripper"]},
     }
     dataset = LeRobotDataset.create(
         repo_id="local/stretch",
