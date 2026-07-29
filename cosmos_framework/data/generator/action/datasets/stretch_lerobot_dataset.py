@@ -5,19 +5,25 @@
 
 Mirrors ``LIBEROLeRobotDataset``: reads the LeRobot parquet directly, windows by
 frame index, and decodes video at each frame's REAL timestamp (FPS-agnostic).
-Unlike LIBERO, the stored per-frame quantity is **absolute** end-effector pose
-(``observation.state.cartesian_position``, xyz + euler_xyz) plus a separate
-gripper state — not a pre-computed delta — matching how
-``DROIDLeRobotDataset``'s ``ee_pose``/``midtrain`` action space works. The
-relative ``[pos_delta(3), rot6d_delta(6), gripper(1)]`` action (10D) is derived
-at read time via ``pose_utils.build_abs_pose_from_components`` +
+Unlike LIBERO, the stored per-frame quantities are **absolute** end-effector
+poses — not a pre-computed delta — matching how ``DROIDLeRobotDataset``'s
+``ee_pose``/``midtrain`` action space works, but with two poses per frame:
+``observation.state.cartesian_position`` (the frame's *current* pose,
+``dex_traj``'s ``history_trajectory[-1]``) and ``action.cartesian_position``
+(the *one-step teleop-commanded target* pose, ``dex_traj``'s ``trajectory[0]``)
+— plus matching ``*.gripper_position`` scalars for each. The relative
+``[pos_delta(3), rot6d_delta(6), gripper(1)]`` action (10D) for step ``i`` is
+derived at read time as the delta from that frame's own current state to its
+own commanded target (not from consecutive *states*, i.e. not
+``state[i] -> state[i+1]``) via ``pose_utils.build_abs_pose_from_components`` +
 ``pose_utils.pose_abs_to_rel`` (``world_framewise``: rotation delta is
-``R_i^T @ R_{i+1}``, but translation delta stays in **world** axes, i.e.
-``p_{i+1} - p_i``, not rotated into the current end-effector frame), from a
-window of ``chunk_length + 1`` consecutive states. This matches the convention
-validated in ego-moma's ``RobotDataset``
+``R_i^T @ R_target``, but translation delta stays in **world** axes, i.e.
+``p_target - p_i``, not rotated into the current end-effector frame). This
+matches the convention validated in ego-moma's ``RobotDataset``
 (``transform_hand_trajectory_absolute_to_relative``) — unlike DROID/Bridge/
-RoboMIND, which stay on body-frame ``backward_framewise`` deltas.
+RoboMIND, which stay on body-frame ``backward_framewise`` deltas. Using the
+teleop's own commanded target (rather than the next *realized* state) avoids
+baking control-loop settling lag into the action.
 
 The data is produced by ``cosmos_framework.scripts.convert_stretch_to_lerobot``,
 which converts raw Stretch teleop episodes (per-frame PNG + npz) into this
@@ -45,6 +51,8 @@ CameraMode = Literal["head_rgb", "gripper_rgb", "concat_view"]
 
 _STATE_FEATURE = "observation.state.cartesian_position"
 _GRIPPER_FEATURE = "observation.state.gripper_position"
+_ACTION_STATE_FEATURE = "action.cartesian_position"
+_ACTION_GRIPPER_FEATURE = "action.gripper_position"
 _HEAD_CAMERA = "observation.images.head_rgb"
 _GRIPPER_CAMERA = "observation.images.gripper_rgb"
 _NORMALIZERS_DIR = Path(__file__).parent.parent / "normalizer_stats"
@@ -121,19 +129,34 @@ class StretchLeRobotDataset(ActionBaseDataset):
         # Compact, lazy frame index (mirrors LIBEROLeRobotDataset): read only the
         # columns the sample builder needs into contiguous arrays, ordered by global
         # frame index, so DataLoader worker forks share them copy-on-write.
-        index_parts, episode_parts, task_parts, ts_parts, state_parts, gripper_parts = [], [], [], [], [], []
+        index_parts, episode_parts, task_parts, ts_parts = [], [], [], []
+        state_parts, gripper_parts, action_state_parts, action_gripper_parts = [], [], [], []
         for path in sorted((self._root / "data").glob("chunk-*/file-*.parquet")):
             table = pq.read_table(
-                path, columns=["index", "episode_index", "task_index", "timestamp", _STATE_FEATURE, _GRIPPER_FEATURE]
+                path,
+                columns=[
+                    "index",
+                    "episode_index",
+                    "task_index",
+                    "timestamp",
+                    _STATE_FEATURE,
+                    _GRIPPER_FEATURE,
+                    _ACTION_STATE_FEATURE,
+                    _ACTION_GRIPPER_FEATURE,
+                ],
             )
             index_parts.append(table["index"].to_numpy())
             episode_parts.append(table["episode_index"].to_numpy())
             task_parts.append(table["task_index"].to_numpy())
             ts_parts.append(table["timestamp"].to_numpy())
             state_parts.append(np.asarray(table[_STATE_FEATURE].to_pylist(), dtype=np.float32))
+            action_state_parts.append(np.asarray(table[_ACTION_STATE_FEATURE].to_pylist(), dtype=np.float32))
             # LeRobot flattens 1-element feature vectors to bare scalars in parquet
             # (shape (1,) -> plain float column); restore the (N, 1) shape here.
             gripper_parts.append(np.asarray(table[_GRIPPER_FEATURE].to_pylist(), dtype=np.float32).reshape(-1, 1))
+            action_gripper_parts.append(
+                np.asarray(table[_ACTION_GRIPPER_FEATURE].to_pylist(), dtype=np.float32).reshape(-1, 1)
+            )
         if not index_parts:
             raise FileNotFoundError(f"No data parquet found under {self._root / 'data'}.")
         order = np.argsort(np.concatenate(index_parts).astype(np.int64), kind="stable")
@@ -142,6 +165,8 @@ class StretchLeRobotDataset(ActionBaseDataset):
         self._row_timestamp = np.concatenate(ts_parts).astype(np.float64)[order]
         self._row_state = np.concatenate(state_parts, axis=0).astype(np.float32)[order]  # [N,6] xyz+euler_xyz
         self._row_gripper = np.concatenate(gripper_parts, axis=0).astype(np.float32)[order]  # [N,1]
+        self._row_action_state = np.concatenate(action_state_parts, axis=0).astype(np.float32)[order]  # [N,6]
+        self._row_action_gripper = np.concatenate(action_gripper_parts, axis=0).astype(np.float32)[order]  # [N,1]
 
         assert np.all(np.diff(self._row_episode) >= 0), "episode_index not contiguous after sorting by frame index"
         ep_vals, ep_starts, ep_counts = np.unique(self._row_episode, return_index=True, return_counts=True)
@@ -235,13 +260,17 @@ class StretchLeRobotDataset(ActionBaseDataset):
         episode_index = int(self._ep_vals[ep])
         episode = self._episodes[episode_index]
 
-        stop = start + self._chunk_length + 1  # chunk_length+1 states -> chunk_length relative actions
+        stop = start + self._chunk_length + 1  # chunk_length+1 frames of video, chunk_length actions
         timestamps = [float(self._row_timestamp[j]) for j in range(start, stop)]
         video = self._load_video(episode, timestamps)
 
-        state_window = self._row_state[start:stop]  # [chunk+1, 6] xyz+euler_xyz
-        gripper_window = self._row_gripper[start:stop]  # [chunk+1, 1]
-        action = self._build_action(state_window, gripper_window)
+        # One action per frame (not per consecutive-frame pair): each of the first
+        # chunk_length frames already carries its own current state and its own
+        # one-step teleop-commanded target.
+        state_window = self._row_state[start : start + self._chunk_length]  # [chunk, 6] xyz+euler_xyz
+        action_state_window = self._row_action_state[start : start + self._chunk_length]  # [chunk, 6]
+        action_gripper_window = self._row_action_gripper[start : start + self._chunk_length]  # [chunk, 1]
+        action = self._build_action(state_window, action_state_window, action_gripper_window)
 
         task = self._tasks[int(self._row_task[start])]
         ai_caption = random.choice([p.strip() for p in task.split(" | ") if p.strip()] or [task])
@@ -264,11 +293,26 @@ class StretchLeRobotDataset(ActionBaseDataset):
             )
         return self._build_result(mode=mode, video=video, action=action, ai_caption=ai_caption, **extras)
 
-    def _build_action(self, state_window: np.ndarray, gripper_window: np.ndarray) -> torch.Tensor:
-        poses_abs = build_abs_pose_from_components(state_window[:, 0:3], state_window[:, 3:6], "euler_xyz")
-        poses_rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="world_framewise")
-        gripper = gripper_window[1:]  # the gripper value reached by each transition, i.e. window[1:]
-        action = np.concatenate([poses_rel, gripper], axis=-1)  # [chunk_length, 10]
+    def _build_action(
+        self,
+        state_window: np.ndarray,
+        action_state_window: np.ndarray,
+        action_gripper_window: np.ndarray,
+    ) -> torch.Tensor:
+        poses_state = build_abs_pose_from_components(state_window[:, 0:3], state_window[:, 3:6], "euler_xyz")
+        poses_target = build_abs_pose_from_components(
+            action_state_window[:, 0:3], action_state_window[:, 3:6], "euler_xyz"
+        )
+        # pose_abs_to_rel only encodes deltas between CONSECUTIVE entries of one
+        # trajectory, so interleave [state_0, target_0, state_1, target_1, ...] and
+        # keep every other output — the state[i] -> target[i] deltas — discarding
+        # the target[i] -> state[i+1] deltas we don't want.
+        interleaved = np.empty((2 * len(poses_state), 4, 4), dtype=poses_state.dtype)
+        interleaved[0::2] = poses_state
+        interleaved[1::2] = poses_target
+        poses_rel_all = pose_abs_to_rel(interleaved, rotation_format="rot6d", pose_convention="world_framewise")
+        poses_rel = poses_rel_all[0::2]  # [chunk_length, 9]: state[i] -> target[i]
+        action = np.concatenate([poses_rel, action_gripper_window], axis=-1)  # [chunk_length, 10]
         return torch.from_numpy(np.ascontiguousarray(action)).float()
 
     def _load_video(self, episode: dict[str, Any], timestamps: list[float]) -> torch.Tensor:
